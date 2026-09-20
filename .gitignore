@@ -1,0 +1,39 @@
+# =============================================================================
+# .gitignore — files and directories that should never be committed to git
+# =============================================================================
+
+# --- R session artifacts -----------------------------------------------------
+# These are generated automatically by R/RStudio and are machine-specific.
+# Committing them causes unnecessary noise and merge conflicts.
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# --- Environment and secrets -------------------------------------------------
+# NEVER commit files containing real credentials.
+# If you create a local .env for testing, it stays off GitHub.
+.env
+.env.*
+secrets.yaml
+*-secret-local.yaml
+
+# --- Kubernetes local overrides ----------------------------------------------
+# You may create local override files (e.g. for real passwords) that must
+# never reach the public repo.
+*.local.yaml
+
+# --- macOS -------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# --- Editor / IDE ------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Miscellaneous -----------------------------------------------------------
+*.log
+tmp/

@@ -1,0 +1,175 @@
+# =============================================================================
+# File:    03-deployment.yaml
+# Purpose: Runs the PostgreSQL database container inside the cluster.
+#
+# What is a Deployment?
+#   A Deployment is a Kubernetes resource that manages a set of identical Pods.
+#   You declare the desired state (which image, how many replicas, env vars)
+#   and the Deployment controller continuously reconciles reality to match it.
+#   If the Pod crashes, the controller restarts it automatically.
+#
+# Why only 1 replica for PostgreSQL?
+#   Running multiple PostgreSQL replicas requires additional tooling
+#   (e.g. Patroni, pgpool) to handle replication and leader election.
+#   For this learning project, one replica is correct. The PVC ensures
+#   data is not lost when the single Pod is restarted.
+#
+# How init.sql runs:
+#   The official postgres:15 image runs any *.sql files found in
+#   /docker-entrypoint-initdb.d/ on first startup (when the data directory
+#   is empty). We mount init.sql there via a ConfigMap (defined inline below).
+#   On subsequent starts the data directory is already populated, so the
+#   init script is skipped — seed data is not re-inserted on every restart.
+#
+# Apply with:
+#   kubectl apply -f k8s/postgres/03-deployment.yaml
+# =============================================================================
+
+# --- ConfigMap for init.sql --------------------------------------------------
+# We embed init.sql as a ConfigMap in the same file as the Deployment so it
+# is applied together. The ConfigMap is then mounted into the PostgreSQL
+# container at /docker-entrypoint-initdb.d/.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name:      postgres-initdb     # referenced under volumes below
+  namespace: field-logger
+  labels:
+    app.kubernetes.io/name:      postgres
+    app.kubernetes.io/component: database
+data:
+  # The key ("init.sql") becomes the filename inside the mounted directory.
+  # The pipe character (|) starts a multi-line YAML string.
+  init.sql: |
+    -- ==========================================================================
+    -- Initialisation script — runs once when the PostgreSQL container first starts
+    -- ==========================================================================
+
+    CREATE TABLE measurements (
+        id               SERIAL PRIMARY KEY,
+        observed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        location         TEXT        NOT NULL,
+        measurement_type TEXT        NOT NULL,
+        value            NUMERIC     NOT NULL,
+        unit             TEXT        NOT NULL,
+        observer         TEXT        NOT NULL,
+        notes            TEXT
+    );
+
+    -- Without an index, PostgreSQL scans every row to find matching records (full table scan).
+    -- With this index, it can jump directly to the relevant rows using a B-tree structure.
+    -- DESC order matches the most common query pattern: "show me the most recent measurements first."
+    CREATE INDEX idx_measurements_observed_at ON measurements (observed_at DESC);
+
+    INSERT INTO measurements (observed_at, location, measurement_type, value, unit, observer, notes)
+    VALUES
+        ('2026-09-01 08:30:00+02', 'Lake Constance - North Shore', 'pH', 7.4, 'pH', 'J. Theiler', 'Clear morning, low wind'),
+        ('2026-09-01 08:45:00+02', 'Lake Constance - North Shore', 'Temperature', 18.5, '°C', 'J. Theiler', 'Water temperature measured at 0.5m depth'),
+        ('2026-09-01 09:00:00+02', 'Lake Constance - North Shore', 'Dissolved Oxygen', 9.2, 'mg/L', 'J. Theiler', 'Measured using a portable DO meter'),
+        ('2026-09-01 09:15:00+02', 'Lake Constance - North Shore', 'Turbidity', 3.5, 'NTU', 'J. Theiler', 'Water clarity measured with a Secchi disk'),
+        ('2026-09-01 09:30:00+02', 'Lake Constance - North Shore', 'Conductivity', 450, 'µS/cm', 'J. Theiler', 'Measured with a handheld conductivity meter')
+    ;
+
+---
+# --- Deployment --------------------------------------------------------------
+apiVersion: apps/v1   # Deployment is in the apps API group, not the core v1 group
+kind: Deployment
+metadata:
+  name:      postgres            # used by kubectl to identify this Deployment
+  namespace: field-logger
+  labels:
+    app.kubernetes.io/name:      postgres
+    app.kubernetes.io/component: database
+spec:
+
+  # One replica — see explanation at the top of this file
+  replicas: 1
+
+  # The selector tells the Deployment which Pods it owns.
+  # It matches Pods whose labels include app: postgres.
+  # This must match spec.template.metadata.labels below.
+  selector:
+    matchLabels:
+      app: postgres
+
+  # Recreate strategy: stop the old Pod before starting the new one.
+  # For a single-instance database this is safer than RollingUpdate, which
+  # could briefly run two Pods writing to the same PVC simultaneously.
+  strategy:
+    type: Recreate
+
+  # Pod template — the Deployment creates Pods that look exactly like this
+  template:
+    metadata:
+      labels:
+        app: postgres            # must match selector.matchLabels above
+        app.kubernetes.io/name:      postgres
+        app.kubernetes.io/component: database
+    spec:
+
+      containers:
+        - name:  postgres
+          image: postgres:15     # official PostgreSQL 15 image from Docker Hub
+
+          # Resource requests and limits.
+          # requests: the minimum guaranteed resources for scheduling.
+          # limits:   the maximum the container may consume before being throttled/killed.
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu:    "250m"     # 250 millicores = 0.25 of one CPU core
+            limits:
+              memory: "512Mi"
+              cpu:    "500m"
+
+          # Environment variables — credentials come from the Secret (01-secret.yaml).
+          # envFrom injects all keys from the Secret as environment variables,
+          # which the official postgres image reads on first startup to create
+          # the database, user, and password.
+          envFrom:
+            - secretRef:
+                name: postgres-secret   # name matches metadata.name in 01-secret.yaml
+
+          ports:
+            - containerPort: 5432       # standard PostgreSQL port
+              name: postgres
+
+          # Liveness probe: Kubernetes restarts the container if this fails.
+          # pg_isready checks whether PostgreSQL is accepting connections.
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "fielduser", "-d", "fielddb"]
+            initialDelaySeconds: 30    # wait 30s before first check (DB needs time to start)
+            periodSeconds:       10
+            failureThreshold:    5
+
+          # Readiness probe: Kubernetes only sends traffic to the Pod when this passes.
+          # The Service (04-service.yaml) excludes Pods that are not ready.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "fielduser", "-d", "fielddb"]
+            initialDelaySeconds: 5
+            periodSeconds:       5
+
+          volumeMounts:
+            # Mount the PVC at PostgreSQL's data directory.
+            # All database files (tables, indexes, WAL logs) are written here.
+            # Because this is a PVC, the data survives Pod restarts.
+            - name:      postgres-data
+              mountPath: /var/lib/postgresql/data
+
+            # Mount the init script. PostgreSQL runs every *.sql file in this
+            # directory on first startup when the data directory is empty.
+            - name:      postgres-initdb
+              mountPath: /docker-entrypoint-initdb.d
+
+      volumes:
+        # Bind the PVC (02-pvc.yaml) to the volume name used in volumeMounts above
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-pvc    # name matches metadata.name in 02-pvc.yaml
+
+        # Bind the ConfigMap (defined at the top of this file) to the initdb volume
+        - name: postgres-initdb
+          configMap:
+            name: postgres-initdb      # name matches the ConfigMap metadata.name above

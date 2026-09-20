@@ -1,0 +1,54 @@
+# =============================================================================
+# File:    04-service.yaml
+# Purpose: Exposes the PostgreSQL Pod under a stable internal DNS name.
+#
+# The problem this solves:
+#   Pods are ephemeral — when a Pod is restarted, it gets a new IP address.
+#   If the Shiny app connected directly to the Pod IP, it would break every
+#   time PostgreSQL restarted. A Service provides a stable virtual IP and DNS
+#   name that never changes, regardless of how many times the Pod behind it
+#   is replaced.
+#
+# How internal DNS works in Kubernetes:
+#   Every Service gets a DNS entry automatically:
+#     <service-name>.<namespace>.svc.cluster.local
+#   From within the same Namespace, the short form also works:
+#     <service-name>
+#   This is why DB_HOST in the ConfigMap (05-configmap.yaml) is set to
+#   "postgres-service" — the Shiny container resolves it to the correct IP
+#   via the cluster's internal DNS server (CoreDNS).
+#
+# Service type ClusterIP:
+#   ClusterIP is the default Service type. It assigns a virtual IP that is
+#   only reachable from inside the cluster. PostgreSQL should never be
+#   directly exposed to the outside world — the Shiny app is the only
+#   client, and it runs inside the same cluster.
+#
+# Apply with:
+#   kubectl apply -f k8s/postgres/04-service.yaml
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name:      postgres-service    # this name becomes the DNS hostname used by the Shiny app
+  namespace: field-logger
+  labels:
+    app.kubernetes.io/name:      postgres
+    app.kubernetes.io/component: database
+spec:
+
+  # ClusterIP: only reachable from within the cluster. Never exposed externally.
+  type: ClusterIP
+
+  # The selector tells the Service which Pods to route traffic to.
+  # It matches Pods with the label app: postgres — the same label set in
+  # the Deployment's pod template (03-deployment.yaml).
+  selector:
+    app: postgres
+
+  ports:
+    - name:       postgres
+      protocol:   TCP
+      port:       5432           # the port the Service listens on (what clients connect to)
+      targetPort: 5432           # the port the container actually listens on (must match containerPort)

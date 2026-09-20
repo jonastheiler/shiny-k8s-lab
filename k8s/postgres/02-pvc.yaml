@@ -1,0 +1,60 @@
+# =============================================================================
+# File:    02-pvc.yaml
+# Purpose: Requests persistent storage for the PostgreSQL database.
+#
+# The problem this solves:
+#   Containers are ephemeral by design — when a Pod is deleted or restarted,
+#   its filesystem is wiped. Without persistent storage, every PostgreSQL
+#   restart would start with an empty database, losing all your measurements.
+#
+# How Kubernetes storage works (three concepts):
+#   PersistentVolume (PV)
+#     A piece of actual storage provisioned in the cluster — could be a disk
+#     on the host machine, an NFS share, or a cloud volume (EBS, Azure Disk).
+#
+#   PersistentVolumeClaim (PVC)
+#     A request for storage. You describe WHAT you need (size, access mode)
+#     and Kubernetes finds or creates a matching PV. Think of it like ordering
+#     from a catalogue — you specify requirements, the cluster fulfils them.
+#
+#   StorageClass
+#     Defines HOW storage is provisioned. minikube ships with a default
+#     StorageClass called "standard" that automatically creates hostPath
+#     volumes (directories on the minikube node's local disk). This is fine
+#     for local development.
+#
+# Access modes:
+#   ReadWriteOnce (RWO) — the volume can be mounted read-write by ONE node.
+#   This is the correct mode for a database: only the PostgreSQL Pod should
+#   ever write to it. (ReadWriteMany would allow multiple nodes to write
+#   simultaneously, which would corrupt a PostgreSQL data directory.)
+#
+# Apply with:
+#   kubectl apply -f k8s/postgres/02-pvc.yaml
+# =============================================================================
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name:      postgres-pvc    # referenced in 03-deployment.yaml under volumes
+  namespace: field-logger
+  labels:
+    app.kubernetes.io/name:      postgres
+    app.kubernetes.io/component: database
+spec:
+
+  # ReadWriteOnce: mounted as read-write by a single node at a time.
+  # Correct for any single-instance database.
+  accessModes:
+    - ReadWriteOnce
+
+  resources:
+    requests:
+      # 1 Gi is ample for a local field measurement logger.
+      # In production, size this based on expected row count and retention policy.
+      storage: 1Gi
+
+  # By omitting storageClassName, Kubernetes uses the cluster's default StorageClass.
+  # In minikube that is "standard" (hostPath). In a cloud cluster it would be
+  # the provider's default block storage (e.g. gp3 on AWS, Premium_LRS on Azure).
+  # Leaving it unset keeps this manifest portable across environments.

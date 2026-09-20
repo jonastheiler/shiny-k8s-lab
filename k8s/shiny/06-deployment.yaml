@@ -1,0 +1,123 @@
+# =============================================================================
+# File:    06-deployment.yaml
+# Purpose: Runs the R Shiny application container inside the cluster.
+#
+# Image source:
+#   The image is pulled from GitHub Container Registry (ghcr.io) where
+#   GitHub Actions pushes it automatically on every commit to main.
+#   Replace <your-github-username> with your actual GitHub username before
+#   deploying. After GitHub Actions runs once, the image will be available.
+#
+# How environment variables reach the app:
+#   The Shiny app reads all config via Sys.getenv() in global.R.
+#   We inject values from two sources:
+#     - ConfigMap (05-configmap.yaml): DB_HOST, DB_PORT, DB_NAME
+#     - Secret    (01-secret.yaml):   DB_USER, DB_PASSWORD
+#   Kubernetes merges both into the container's environment at startup.
+#
+# Apply with:
+#   kubectl apply -f k8s/shiny/06-deployment.yaml
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name:      shiny-app
+  namespace: field-logger
+  labels:
+    app.kubernetes.io/name:      shiny
+    app.kubernetes.io/component: frontend
+spec:
+
+  # One replica is sufficient for a local learning cluster.
+  # Shiny Server handles multiple concurrent users within a single Pod.
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: shiny-app
+
+  # RollingUpdate (the default) replaces Pods gradually with zero downtime.
+  # This is safe for the Shiny app because it is stateless — it holds no
+  # data itself, so running two versions briefly in parallel is harmless.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # never have fewer than 1 Pod running during an update
+      maxSurge:       1   # allow 1 extra Pod to be created during the update
+
+  template:
+    metadata:
+      labels:
+        app: shiny-app
+        app.kubernetes.io/name:      shiny
+        app.kubernetes.io/component: frontend
+    spec:
+
+      containers:
+        - name: shiny-app
+
+          # Image built and pushed by .github/workflows/build-and-push.yml.
+          # The :latest tag always points to the most recent build from main.
+          image: ghcr.io/jonastheiler/shiny-k8s-lab:latest
+
+          # Always pull the image on Pod start.
+          # This ensures the cluster always runs the latest version from ghcr.io
+          # after a GitHub Actions build, without needing to change the tag.
+          imagePullPolicy: Always
+
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu:    "250m"
+            limits:
+              memory: "1Gi"    # R and ggplot2 can be memory-hungry; give it room
+              cpu:    "500m"
+
+          # Inject non-sensitive config from the ConfigMap (05-configmap.yaml).
+          # This sets DB_HOST, DB_PORT, and DB_NAME in the container environment.
+          envFrom:
+            - configMapRef:
+                name: shiny-config      # name matches metadata.name in 05-configmap.yaml
+
+          # Inject sensitive credentials from the Secret (01-secret.yaml).
+          # We use env (not envFrom) here to rename the keys to what global.R expects.
+          # The Secret has POSTGRES_USER and POSTGRES_PASSWORD (postgres convention),
+          # but global.R reads DB_USER and DB_PASSWORD (our convention).
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret     # name matches metadata.name in 01-secret.yaml
+                  key:  POSTGRES_USER       # key inside the Secret
+
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key:  POSTGRES_PASSWORD
+
+          ports:
+            - containerPort: 3838           # Shiny Server's default port
+              name: shiny
+
+          # Liveness probe: restarts the container if Shiny Server stops responding.
+          # httpGet checks that the server returns any HTTP response on port 3838.
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3838
+            initialDelaySeconds: 30        # Shiny takes ~20s to start and load packages
+            periodSeconds:       15
+            failureThreshold:    3
+
+          # Readiness probe: holds traffic until the app is fully initialised.
+          # The database connection pool (global.R) must be established before
+          # the app can serve requests — this probe ensures that.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3838
+            initialDelaySeconds: 20
+            periodSeconds:       10
+            failureThreshold:    3

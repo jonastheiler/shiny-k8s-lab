@@ -1,0 +1,68 @@
+# =============================================================================
+# File:    08-ingress.yaml
+# Purpose: Exposes the Shiny app to the outside world via HTTP.
+#
+# What is an Ingress?
+#   An Ingress is a Kubernetes resource that manages external HTTP/HTTPS access
+#   to Services inside the cluster. It acts as a reverse proxy — it receives
+#   requests from your browser, inspects the hostname and path, and forwards
+#   the request to the correct Service.
+#
+# What is an Ingress Controller?
+#   The Ingress resource is just configuration — it does nothing on its own.
+#   An Ingress Controller is the actual software that reads Ingress resources
+#   and implements the routing rules. We use the nginx Ingress Controller,
+#   enabled via: minikube addons enable ingress
+#
+# How to access the app after deploying:
+#   1. Get the minikube IP:
+#        minikube ip
+#   2. Add it to your /etc/hosts file in WSL2:
+#        echo "$(minikube ip) field-logger.local" | sudo tee -a /etc/hosts
+#   3. Open http://field-logger.local in your browser.
+#
+# Apply with:
+#   kubectl apply -f k8s/shiny/08-ingress.yaml
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name:      shiny-ingress
+  namespace: field-logger
+  labels:
+    app.kubernetes.io/name:      shiny
+    app.kubernetes.io/component: frontend
+  annotations:
+    # Tell Kubernetes which Ingress Controller should handle this resource.
+    # Without this annotation, if multiple controllers are installed, none of
+    # them may pick up the resource.
+    kubernetes.io/ingress.class: "nginx"
+
+    # Strip any trailing slashes from the request path before forwarding.
+    # Shiny Server expects requests at / — without this, /app/ would not match.
+    nginx.ingress.kubernetes.io/rewrite-target: /
+
+    # Increase the proxy read timeout to 300 seconds.
+    # R can take time to execute reactive computations or database queries.
+    # Without this, nginx would cut off long-running requests after 60 seconds.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+
+    # Increase the body size limit for file uploads or large form submissions.
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+
+spec:
+  rules:
+    # The hostname that the Ingress listens for.
+    # Requests to http://field-logger.local are routed to the shiny-service.
+    # This hostname must be added to /etc/hosts in WSL2 (see instructions above).
+    - host: field-logger.local
+      http:
+        paths:
+          - path:     /
+            pathType: Prefix      # match / and any path that starts with /
+            backend:
+              service:
+                name: shiny-service   # name matches metadata.name in 07-service.yaml
+                port:
+                  number: 80          # port matches spec.ports[0].port in 07-service.yaml

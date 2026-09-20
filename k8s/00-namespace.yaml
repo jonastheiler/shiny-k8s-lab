@@ -1,0 +1,30 @@
+# =============================================================================
+# File:    00-namespace.yaml
+# Purpose: Creates the Kubernetes Namespace for this project.
+#
+# What is a Namespace?
+#   A Namespace is a virtual cluster inside your physical cluster. It groups
+#   all resources that belong to this project (Pods, Services, Secrets, etc.)
+#   into one isolated workspace. This means:
+#     - Resources in different Namespaces do not conflict, even if they share names
+#     - You can delete the entire project with one command: kubectl delete namespace field-logger
+#     - Resource quotas and access controls can be applied per Namespace
+#
+# Why "field-logger"?
+#   The name matches the app's purpose and is reused consistently across all
+#   manifests in this project (every resource specifies namespace: field-logger).
+#   Keeping names consistent makes debugging much easier.
+#
+# Apply with:
+#   kubectl apply -f k8s/00-namespace.yaml
+# =============================================================================
+
+apiVersion: v1        # Namespace is a core Kubernetes resource — uses the v1 API
+kind: Namespace
+metadata:
+  name: field-logger  # this name is referenced in every other manifest in this project
+  labels:
+    # Labels are key-value pairs attached to resources for organisation and selection.
+    # These are informational — they help you filter resources with kubectl.
+    app.kubernetes.io/name:       field-logger
+    app.kubernetes.io/managed-by: kubectl

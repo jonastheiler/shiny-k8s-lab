@@ -1,0 +1,126 @@
+# =============================================================================
+# File:    .github/workflows/build-and-push.yml
+# Purpose: Automatically builds the Shiny Docker image and pushes it to
+#          GitHub Container Registry (ghcr.io) on every push to main that
+#          changes files inside the app/ directory.
+#
+# What is GitHub Actions?
+#   GitHub Actions is a CI/CD platform built into GitHub. You define workflows
+#   in YAML files under .github/workflows/. GitHub runs them automatically on
+#   events like push, pull_request, or on a schedule.
+#
+# What is GitHub Container Registry (ghcr.io)?
+#   A Docker image registry provided by GitHub. Free for public repositories.
+#   Images are pushed here by CI and pulled by Kubernetes when a Pod starts.
+#   Authentication uses the built-in GITHUB_TOKEN — no manual secrets needed.
+#
+# Image tagging strategy:
+#   We push two tags on every build:
+#     :latest        — always points to the most recent build from main.
+#                      The Deployment uses this tag with imagePullPolicy: Always,
+#                      so a `make restart` picks up the new image automatically.
+#     :<git-sha>     — an immutable tag tied to the exact commit that built it.
+#                      Useful for auditing, rollbacks, and debugging.
+#
+# How to trigger a deployment after this workflow runs:
+#   The workflow only builds and pushes the image — it does not apply manifests.
+#   After the workflow completes, run `make restart` on your local machine to
+#   tell Kubernetes to pull the new image. This is the standard pattern for a
+#   local cluster that is not reachable from GitHub's runners.
+# =============================================================================
+
+name: Build and Push Shiny Image
+
+on:
+  push:
+    branches:
+      - main                    # only run on pushes to the main branch
+    paths:
+      - "app/**"                # only run when files inside app/ change
+      - ".github/workflows/build-and-push.yml"  # also re-run if the workflow itself changes
+
+  # Allow manually triggering the workflow from the GitHub Actions UI.
+  # Useful for forcing a rebuild without making a code change.
+  workflow_dispatch:
+
+# Sets the permissions granted to the GITHUB_TOKEN for this workflow.
+# contents: read  — allows checking out the repository
+# packages: write — allows pushing to GitHub Container Registry
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    name: Build and push Docker image
+    runs-on: ubuntu-latest      # GitHub-hosted runner with Docker pre-installed
+
+    steps:
+
+      # -----------------------------------------------------------------------
+      # Step 1: Check out the repository
+      # Without this step, the runner has no access to your code.
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Step 2: Set up Docker Buildx
+      # Buildx is an extended Docker build client that supports:
+      #   - Multi-platform builds (e.g. linux/amd64 and linux/arm64)
+      #   - Advanced caching strategies
+      #   - BuildKit features (faster, more efficient builds)
+      # -----------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # -----------------------------------------------------------------------
+      # Step 3: Log in to GitHub Container Registry
+      # GITHUB_TOKEN is automatically provided by GitHub Actions — no manual
+      # secret configuration is needed. It has exactly the permissions declared
+      # in the `permissions` block above.
+      # -----------------------------------------------------------------------
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}       # the GitHub user or bot that triggered the run
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # Step 4: Extract metadata for image tags and labels
+      # docker/metadata-action automatically generates:
+      #   - tags:  ghcr.io/<owner>/<repo>:latest and :<short-git-sha>
+      #   - labels: org.opencontainers.image.* standard labels (author, version, etc.)
+      # -----------------------------------------------------------------------
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/shiny-k8s-lab
+          tags: |
+            # always tag with :latest when pushing to main
+            type=raw,value=latest,enable={{is_default_branch}}
+            # also tag with the short git SHA for traceability (e.g. :a1b2c3d)
+            type=sha,prefix=,format=short
+
+      # -----------------------------------------------------------------------
+      # Step 5: Build and push the image
+      # The build context is the app/ directory — only files inside app/ are
+      # sent to the Docker daemon, keeping the build context small and fast.
+      #
+      # Cache strategy: GitHub Actions cache is used to store Docker layer cache
+      # between runs. On subsequent builds, unchanged layers (e.g. R package
+      # installation) are restored from cache instead of re-executed.
+      # This reduces build time from ~10 minutes to ~1 minute for small changes.
+      # -----------------------------------------------------------------------
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context:    ./app          # build context: the app/ directory
+          file:       ./app/Dockerfile
+          push:       true           # push to ghcr.io after a successful build
+          tags:       ${{ steps.meta.outputs.tags }}
+          labels:     ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha       # restore cache from GitHub Actions cache
+          cache-to:   type=gha,mode=max  # save all layers to cache for future runs

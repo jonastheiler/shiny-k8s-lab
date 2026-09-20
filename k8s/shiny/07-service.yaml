@@ -1,0 +1,41 @@
+# =============================================================================
+# File:    07-service.yaml
+# Purpose: Exposes the Shiny app Pod under a stable internal DNS name,
+#          and acts as the backend target for the Ingress (08-ingress.yaml).
+#
+# Why does the Shiny app need a Service if the Ingress exposes it externally?
+#   The Ingress does not talk to Pods directly — it routes traffic to a Service,
+#   which then forwards it to the correct Pod. This indirection means:
+#     - The Ingress config never needs to change when Pods are replaced
+#     - The Service load-balances across multiple replicas if you scale up
+#     - Other Pods inside the cluster can also reach Shiny via this Service name
+#
+# Apply with:
+#   kubectl apply -f k8s/shiny/07-service.yaml
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name:      shiny-service       # referenced by name in 08-ingress.yaml
+  namespace: field-logger
+  labels:
+    app.kubernetes.io/name:      shiny
+    app.kubernetes.io/component: frontend
+spec:
+
+  # ClusterIP: reachable only from within the cluster.
+  # External access is handled by the Ingress — the Service itself
+  # never needs to be exposed directly to the outside world.
+  type: ClusterIP
+
+  # Route traffic to any Pod with the label app: shiny-app.
+  # Must match spec.template.metadata.labels in 06-deployment.yaml.
+  selector:
+    app: shiny-app
+
+  ports:
+    - name:       shiny
+      protocol:   TCP
+      port:       80             # the port the Service listens on (standard HTTP)
+      targetPort: 3838           # the port Shiny Server listens on inside the container

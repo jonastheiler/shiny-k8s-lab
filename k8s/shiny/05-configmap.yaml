@@ -1,0 +1,47 @@
+# =============================================================================
+# File:    05-configmap.yaml
+# Purpose: Stores non-sensitive configuration for the Shiny app.
+#
+# What is a ConfigMap?
+#   A ConfigMap holds key-value pairs that are injected into Pods as
+#   environment variables (or mounted as files). It is the Kubernetes-native
+#   way to separate configuration from code.
+#
+# ConfigMap vs Secret — when to use which:
+#   Secret     → sensitive values: passwords, tokens, private keys
+#   ConfigMap  → non-sensitive values: hostnames, port numbers, feature flags
+#
+#   The database hostname and port are not secret — anyone who can reach the
+#   cluster can see them. The password in 01-secret.yaml is what actually
+#   protects the database.
+#
+# Why DB_HOST = "postgres-service"?
+#   This is the name of the Kubernetes Service defined in 04-service.yaml.
+#   Kubernetes' internal DNS server (CoreDNS) resolves "postgres-service"
+#   to the Service's ClusterIP from anywhere within the field-logger Namespace.
+#   The Shiny app calls Sys.getenv("DB_HOST") in global.R, which returns
+#   "postgres-service", and RPostgres connects to it — no IP address needed.
+#
+# Apply with:
+#   kubectl apply -f k8s/shiny/05-configmap.yaml
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name:      shiny-config        # referenced by name in 06-deployment.yaml
+  namespace: field-logger
+  labels:
+    app.kubernetes.io/name:      shiny
+    app.kubernetes.io/component: frontend
+data:
+  # The hostname the Shiny app uses to connect to PostgreSQL.
+  # Must match the Service name in 04-service.yaml exactly.
+  DB_HOST: "postgres-service"
+
+  # Standard PostgreSQL port. Defined here (not hardcoded in global.R) so it
+  # can be changed without rebuilding the Docker image.
+  DB_PORT: "5432"
+
+  # The database name. Must match POSTGRES_DB in 01-secret.yaml.
+  DB_NAME: "fielddb"
