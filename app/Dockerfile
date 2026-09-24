@@ -84,7 +84,11 @@ COPY server.R  /srv/shiny-server/server.R
 RUN chown -R shiny:shiny /srv/shiny-server \
     && chmod -R 755 /srv/shiny-server \
     && mkdir -p /var/log/shiny-server \
-    && chown -R shiny:shiny /var/log/shiny-server
+    && chown -R shiny:shiny /var/log/shiny-server \
+    # s6-overlay's 01_set_env init script writes Kubernetes env vars (DB_HOST etc.)
+    # into this file so R can read them via Sys.getenv(). Without write permission
+    # the script silently skips the vars and dbPool() can't find the DB host.
+    && chmod 666 /usr/local/lib/R/etc/Renviron.site
 
 # -----------------------------------------------------------------------------
 # PORT

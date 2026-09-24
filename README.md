@@ -25,6 +25,37 @@ A **Field Measurement Logger** — a web app where researchers log environmental
 
 ---
 
+## Quick start
+
+No local build required — `kubectl apply` pulls the pre-built image from
+`ghcr.io/jonastheiler/shiny-k8s-lab:latest` automatically.
+
+```bash
+git clone git@github.com:jonastheiler/shiny-k8s-lab.git
+cd shiny-k8s-lab
+
+# Start the cluster
+minikube start
+minikube addons enable ingress
+
+# Deploy
+kubectl apply -f k8s/00-namespace.yaml
+kubectl apply -f k8s/postgres/
+kubectl apply -f k8s/shiny/
+
+# Wait until both pods show 1/1 Running
+kubectl get pods -n field-logger -w
+
+# Open the app
+kubectl port-forward svc/shiny-service 8080:80 -n field-logger --address=0.0.0.0
+```
+
+Open **http://localhost:8080** in your browser.
+
+> **WSL2 on Windows?** See the [WSL2 notes](#wsl2-on-windows) section at the bottom.
+
+---
+
 ## Repository structure
 
 ```
@@ -44,7 +75,7 @@ A **Field Measurement Logger** — a web app where researchers log environmental
 │   ├── postgres/
 │   │   ├── 01-secret.yaml       # DB credentials (never hardcoded)
 │   │   ├── 02-pvc.yaml          # Persistent storage for DB data
-│   │   ├── 03-deployment.yaml   # PostgreSQL Deployment
+│   │   ├── 03-deployment.yaml   # PostgreSQL Deployment + init ConfigMap
 │   │   └── 04-service.yaml      # Internal DNS name for the DB
 │   └── shiny/
 │       ├── 05-configmap.yaml    # Non-sensitive app configuration
@@ -59,103 +90,27 @@ A **Field Measurement Logger** — a web app where researchers log environmental
 
 ## Prerequisites
 
-- Windows 10/11 with WSL2 enabled
-- Ubuntu 22.04 WSL2 distro
-- Docker Desktop with WSL2 integration enabled for Ubuntu-22.04
-- A GitHub account (free tier is sufficient)
+- [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on Mac/Windows, Docker Engine on Linux)
+- [minikube](https://minikube.sigs.k8s.io/docs/start/)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/)
+- A GitHub account (free tier is sufficient — needed only if you want to push your own image via CI)
 
 ---
 
 ## Step-by-step setup
 
-### Step 1 — Fix WSL2 DNS (if needed)
-
-WSL2 sometimes generates a broken `/etc/resolv.conf`. If `curl` cannot resolve hostnames,
-override the nameserver:
+### Step 1 — Start the Kubernetes cluster
 
 ```bash
-# Check what DNS server WSL2 is currently using
-cat /etc/resolv.conf
-
-# Override with Google's public DNS (8.8.8.8)
-echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
-```
-
-To make this fix permanent across WSL restarts:
-
-```bash
-# 1. Prevent WSL from overwriting resolv.conf on startup
-sudo tee /etc/wsl.conf > /dev/null <<EOF
-[network]
-generateResolvConf = false
-EOF
-
-# 2. Write a permanent resolv.conf
-sudo tee /etc/resolv.conf > /dev/null <<EOF
-nameserver 8.8.8.8
-nameserver 8.8.4.4
-EOF
-```
-
-After changing `/etc/wsl.conf`, restart WSL from PowerShell:
-```powershell
-wsl --shutdown
-# Then reopen your Ubuntu terminal
-```
-
----
-
-### Step 2 — Install minikube
-
-minikube runs a single-node Kubernetes cluster as a Docker container inside WSL2.
-
-```bash
-# Download the minikube binary for Linux (amd64)
-curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
-
-# Install it to /usr/local/bin so it is available system-wide
-sudo install minikube-linux-amd64 /usr/local/bin/minikube
-
-# Remove the downloaded file — we only needed it for the install
-rm minikube-linux-amd64
-
-# Verify the installation
-minikube version
-```
-
----
-
-### Step 3 — Install kubectl
-
-`kubectl` is the Kubernetes command-line tool — the primary way to interact with the cluster.
-
-```bash
-# Fetch the latest stable release version number, then download that binary
-curl -LO "https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-
-# Install system-wide
-sudo install kubectl /usr/local/bin/kubectl
-
-# Clean up
-rm kubectl
-
-# Verify
-kubectl version --client
-```
-
----
-
-### Step 4 — Start the Kubernetes cluster
-
-```bash
-# Start minikube using Docker as the driver.
-# The Docker driver creates a container that acts as the Kubernetes node —
-# no VM or hypervisor needed since Docker Desktop is already running.
-minikube start --driver=docker
+# Start minikube. It auto-selects the best driver for your OS:
+#   macOS   → Docker or HyperKit
+#   Linux   → Docker or KVM2
+#   Windows (WSL2) → Docker  (see WSL2 notes below)
+minikube start
 
 # Enable the nginx Ingress controller addon.
-# This is what allows us to expose the Shiny app via a hostname (field-logger.local)
-# rather than an IP address and port number.
+# This installs the ingress-nginx controller into the cluster, which allows
+# HTTP routing based on hostname rules defined in Ingress manifests.
 minikube addons enable ingress
 
 # Verify the cluster is running — you should see one node with status Ready
@@ -170,7 +125,7 @@ minikube   Ready    control-plane   1m    v1.x.x
 
 ---
 
-### Step 5 — Create the project folder structure
+### Step 2 — Create the project folder structure
 
 ```bash
 mkdir -p app db k8s/postgres k8s/shiny .github/workflows
@@ -178,7 +133,7 @@ mkdir -p app db k8s/postgres k8s/shiny .github/workflows
 
 ---
 
-### Step 6 — Write the database schema (`db/init.sql`)
+### Step 3 — Write the database schema (`db/init.sql`)
 
 *(See `db/init.sql` for the full file with comments.)*
 
@@ -198,7 +153,7 @@ collection workflow:
 
 ---
 
-### Step 7 — Write the R Shiny app (`app/`)
+### Step 4 — Write the R Shiny app (`app/`)
 
 *(See `app/global.R`, `app/ui.R`, `app/server.R` for the full files with comments.)*
 
@@ -212,7 +167,7 @@ concurrent users share connections efficiently without reconnecting on every que
 
 ---
 
-### Step 8 — Write the Dockerfile (`app/Dockerfile`)
+### Step 5 — Write the Dockerfile (`app/Dockerfile`)
 
 *(See `app/Dockerfile` for the full file with comments.)*
 
@@ -220,7 +175,7 @@ Based on `rocker/shiny:latest`. Installs the PostgreSQL client library and all r
 
 ---
 
-### Step 9 — Write the Kubernetes manifests (`k8s/`)
+### Step 6 — Write the Kubernetes manifests (`k8s/`)
 
 *(See each file in `k8s/` for the full manifests with comments.)*
 
@@ -229,7 +184,7 @@ Applied in dependency order:
 1. `00-namespace.yaml` — workspace isolation
 2. `01-secret.yaml` — encrypted DB credentials
 3. `02-pvc.yaml` — persistent disk for the database
-4. `03-deployment.yaml` — PostgreSQL container
+4. `03-deployment.yaml` — PostgreSQL container + init ConfigMap
 5. `04-service.yaml` — internal DNS for the DB
 6. `05-configmap.yaml` — non-sensitive Shiny app config
 7. `06-deployment.yaml` — Shiny container
@@ -238,31 +193,54 @@ Applied in dependency order:
 
 ---
 
-### Step 10 — Deploy to the cluster
+### Step 7 — Deploy to the cluster
 
 ```bash
-# Apply all manifests in order
+# Apply all manifests in order (or use: make deploy)
 kubectl apply -f k8s/00-namespace.yaml
 kubectl apply -f k8s/postgres/
 kubectl apply -f k8s/shiny/
 
-# Watch Pods come up (Ctrl+C to exit)
+# Watch Pods come up — wait until both show 1/1 Running (Ctrl+C to exit)
 kubectl get pods -n field-logger -w
-
-# Get the app URL
-kubectl get ingress -n field-logger
 ```
 
-Add the minikube IP to your hosts file so the hostname resolves:
-```bash
-echo "$(minikube ip) field-logger.local" | sudo tee -a /etc/hosts
+Expected output once ready:
 ```
-
-Open `http://field-logger.local` in your browser.
+NAME                         READY   STATUS    RESTARTS   AGE
+postgres-xxx                 1/1     Running   0          60s
+shiny-app-xxx                1/1     Running   0          60s
+```
 
 ---
 
-### Step 11 — GitHub Actions CI
+### Step 8 — Access the app
+
+```bash
+# Forward the Shiny service to port 8080 (keep this terminal open)
+kubectl port-forward svc/shiny-service 8080:80 -n field-logger --address=0.0.0.0
+```
+
+Open **http://localhost:8080** in your browser.
+
+To access the database directly (e.g. from DBeaver or psql):
+
+```bash
+# Decode credentials from the Secret
+kubectl get secret postgres-secret -n field-logger \
+  -o jsonpath='{.data.POSTGRES_USER}' | base64 -d
+
+kubectl get secret postgres-secret -n field-logger \
+  -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d
+
+# Forward the PostgreSQL port
+kubectl port-forward svc/postgres-service 5432:5432 -n field-logger --address=0.0.0.0
+# Connect to localhost:5432 with the credentials above
+```
+
+---
+
+### Step 9 — GitHub Actions CI
 
 *(See `.github/workflows/build-and-push.yml` for the full workflow with comments.)*
 
@@ -271,6 +249,13 @@ On every push to `main` that touches `app/`, GitHub Actions:
 2. Logs into GitHub Container Registry (`ghcr.io`) using the built-in `GITHUB_TOKEN`
 3. Builds the Shiny Docker image
 4. Pushes it tagged with both `latest` and the commit SHA
+
+After a new image is pushed, force the cluster to pull it:
+
+```bash
+kubectl rollout restart deployment/shiny-app -n field-logger
+# or: make restart
+```
 
 ---
 
@@ -288,12 +273,61 @@ On every push to `main` that touches `app/`, GitHub Actions:
 
 ---
 
-## Lessons learned / pitfalls
+## Lessons learned
 
-- **WSL2 DNS**: WSL2 may generate a broken `resolv.conf`. Always verify `curl` works before proceeding.
-- **Docker driver for minikube**: Must use `--driver=docker` on WSL2 — the default VM drivers require a hypervisor that conflicts with WSL2's own VM layer.
+- **Docker driver for minikube**: On some systems the default driver requires a hypervisor. If `minikube start` fails, try `minikube start --driver=docker` to use Docker as the node runtime instead.
+
 - **Ingress addon**: Must be enabled before applying the Ingress manifest, or the Ingress will have no address.
-- **Hosts file**: minikube does not auto-register hostnames — you must manually add `$(minikube ip) field-logger.local` to `/etc/hosts`.
+
+- **imagePullPolicy: Always**: The Shiny Deployment uses this so that `kubectl rollout restart` always pulls the latest image from ghcr.io without needing a tag change.
+
+- **s6-overlay and Renviron.site**: The `rocker/shiny` image uses `s6-overlay` as PID 1. Its `01_set_env` init script writes Kubernetes environment variables (DB_HOST, DB_PORT, etc.) into `/usr/local/lib/R/etc/Renviron.site` so R can read them via `Sys.getenv()`. Without `chmod 666` on that file the script silently skips the variables and `dbPool()` tries to connect via Unix socket instead of TCP.
+
+- **Connection pool over a single connection**: `dbPool()` keeps several database connections open and hands them out on demand. A single `dbConnect()` would serialize all queries — the second user has to wait for the first. The pool eliminates that bottleneck.
+
+---
+
+## WSL2 on Windows
+
+Running minikube on WSL2 with the Docker driver requires a few extra steps.
+
+**Use the Docker driver explicitly:**
+```bash
+minikube start --driver=docker
+```
+
+**Fix broken DNS (if `curl` cannot resolve hostnames):**
+```bash
+# Override with Google's public DNS
+echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+
+# To make this permanent across WSL restarts:
+sudo tee /etc/wsl.conf > /dev/null <<EOF
+[network]
+generateResolvConf = false
+EOF
+
+sudo tee /etc/resolv.conf > /dev/null <<EOF
+nameserver 8.8.8.8
+nameserver 8.8.4.4
+EOF
+```
+
+Restart WSL from PowerShell after changing `/etc/wsl.conf`:
+```powershell
+wsl --shutdown
+```
+
+**Browser access via port-forward:**
+`minikube tunnel` binds to `127.0.0.1` inside WSL2, which Windows cannot reach directly.
+`kubectl port-forward --address=0.0.0.0` binds on all interfaces, which WSL2 forwards to
+Windows automatically. This is why the Quick Start uses port-forward instead of the Ingress
+hostname — it works on all platforms without any hosts file configuration.
+
+**Avoid `.local` hostnames in Chrome:**
+`.local` is reserved for mDNS (Bonjour/Avahi). Chrome may route `.local` hostnames through
+mDNS rather than `/etc/hosts`, making the address unreachable. Accessing the app via
+`localhost:PORT` sidesteps this entirely.
 
 ---
 

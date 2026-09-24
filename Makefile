@@ -125,16 +125,14 @@ restart:
 	@echo ">>> Restart triggered. Watch progress with: make status"
 
 # -----------------------------------------------------------------------------
-# url — print the app URL and remind the user to add it to /etc/hosts
+# url — print the port-forward command to access the app in a browser
 # -----------------------------------------------------------------------------
 url:
 	@echo ""
-	@echo "=== App URL ==="
-	@echo "http://field-logger.local"
+	@echo "=== Access the app ==="
 	@echo ""
-	@echo "Make sure your /etc/hosts contains:"
-	@MINIKUBE_IP=$$(minikube ip); \
-	echo "  $$MINIKUBE_IP field-logger.local"; \
-	echo ""; \
-	echo "To add it automatically, run:"; \
-	echo "  echo \"$$MINIKUBE_IP field-logger.local\" | sudo tee -a /etc/hosts"
+	@echo "Run this command (keep the terminal open):"
+	@echo "  kubectl port-forward svc/shiny-service 8080:80 -n $(NAMESPACE) --address=0.0.0.0"
+	@echo ""
+	@echo "Then open: http://localhost:8080"
+	@echo ""
