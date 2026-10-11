@@ -114,7 +114,7 @@ ui <- navbarPage(
       mainPanel(
         width = 8,
         h4("How to use"),
-        p("Fill in all required fields and click ", strong("Submit measurement"), "."),
+        p("Fill in all required fields. Then click ", strong("Submit measurement"), "."),
         p("The entry will be saved to the PostgreSQL database immediately and will
            appear in the ", strong("Browse Data"), " tab.")
       )
