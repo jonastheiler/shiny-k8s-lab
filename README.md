@@ -25,35 +25,6 @@ A **Field Measurement Logger** — a web app where researchers log environmental
 
 ---
 
-## Quick start
-
-No local build required — `kubectl apply` pulls the pre-built image from
-`ghcr.io/jonastheiler/shiny-k8s-lab:latest` automatically.
-
-```bash
-git clone git@github.com:jonastheiler/shiny-k8s-lab.git
-cd shiny-k8s-lab
-
-# Start the cluster
-minikube start
-minikube addons enable ingress
-
-# Deploy
-kubectl apply -f k8s/00-namespace.yaml
-kubectl apply -f k8s/postgres/
-kubectl apply -f k8s/shiny/
-
-# Wait until both pods show 1/1 Running
-kubectl get pods -n field-logger -w
-
-# Open the app
-kubectl port-forward svc/shiny-service 8080:80 -n field-logger --address=0.0.0.0
-```
-
-Open **http://localhost:8080** in your browser.
-
----
-
 ## Repository structure
 
 ```
@@ -66,21 +37,18 @@ Open **http://localhost:8080** in your browser.
 │   ├── global.R                 # Database connection pool, shared config
 │   ├── ui.R                     # Shiny user interface
 │   └── server.R                 # Shiny server logic (CRUD operations)
-├── db/
-│   └── init.sql                 # PostgreSQL schema definition
 ├── k8s/
 │   ├── 00-namespace.yaml        # Kubernetes Namespace (isolated workspace)
 │   ├── postgres/
 │   │   ├── 01-secret.yaml       # DB credentials (never hardcoded)
 │   │   ├── 02-pvc.yaml          # Persistent storage for DB data
-│   │   ├── 03-deployment.yaml   # PostgreSQL Deployment + init ConfigMap
+│   │   ├── 03-deployment.yaml   # PostgreSQL Deployment + init.sql schema (ConfigMap)
 │   │   └── 04-service.yaml      # Internal DNS name for the DB
 │   └── shiny/
 │       ├── 05-configmap.yaml    # Non-sensitive app configuration
 │       ├── 06-deployment.yaml   # Shiny app Deployment
 │       ├── 07-service.yaml      # Internal DNS name for the Shiny app
 │       └── 08-ingress.yaml      # External HTTP access via hostname
-├── Makefile                     # Convenience commands (deploy, teardown, logs)
 └── README.md                    # You are here
 ```
 
@@ -92,6 +60,11 @@ Open **http://localhost:8080** in your browser.
 - [minikube](https://minikube.sigs.k8s.io/docs/start/)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - A GitHub account (free tier is sufficient — needed only if you want to push your own image via CI)
+
+```bash
+git clone git@github.com:jonastheiler/shiny-k8s-lab.git
+cd shiny-k8s-lab
+```
 
 ---
 
@@ -123,17 +96,12 @@ minikube   Ready    control-plane   1m    v1.x.x
 
 ---
 
-### Step 2 — Create the project folder structure
+### Step 2 — The database schema
 
-```bash
-mkdir -p app db k8s/postgres k8s/shiny .github/workflows
-```
+*(See the `postgres-initdb` ConfigMap at the top of `k8s/postgres/03-deployment.yaml`.)*
 
----
-
-### Step 3 — Write the database schema (`db/init.sql`)
-
-*(See `db/init.sql` for the full file with comments.)*
+The schema lives in a ConfigMap that is mounted into `/docker-entrypoint-initdb.d/`. The official
+postgres image runs it **once**, on first start with an empty data directory — later restarts skip it.
 
 The schema defines one table: `measurements`. Every field is chosen for a real field-data
 collection workflow:
@@ -151,7 +119,7 @@ collection workflow:
 
 ---
 
-### Step 4 — Write the R Shiny app (`app/`)
+### Step 3 — The R Shiny app (`app/`)
 
 *(See `app/global.R`, `app/ui.R`, `app/server.R` for the full files with comments.)*
 
@@ -165,7 +133,7 @@ concurrent users share connections efficiently without reconnecting on every que
 
 ---
 
-### Step 5 — Write the Dockerfile (`app/Dockerfile`)
+### Step 4 — The Dockerfile (`app/Dockerfile`)
 
 *(See `app/Dockerfile` for the full file with comments.)*
 
@@ -173,7 +141,7 @@ Based on `rocker/shiny:latest`. Installs the PostgreSQL client library and all r
 
 ---
 
-### Step 6 — Write the Kubernetes manifests (`k8s/`)
+### Step 5 — The Kubernetes manifests (`k8s/`)
 
 *(See each file in `k8s/` for the full manifests with comments.)*
 
@@ -191,10 +159,10 @@ Applied in dependency order:
 
 ---
 
-### Step 7 — Deploy to the cluster
+### Step 6 — Deploy to the cluster
 
 ```bash
-# Apply all manifests in order (or use: make deploy)
+# Apply all manifests in order
 kubectl apply -f k8s/00-namespace.yaml
 kubectl apply -f k8s/postgres/
 kubectl apply -f k8s/shiny/
@@ -212,14 +180,22 @@ shiny-app-xxx                1/1     Running   0          60s
 
 ---
 
-### Step 8 — Access the app
+### Step 7 — Access the app
 
 ```bash
 # Forward the Shiny service to port 8080 (keep this terminal open)
-kubectl port-forward svc/shiny-service 8080:80 -n field-logger --address=0.0.0.0
+kubectl port-forward svc/shiny-service 8080:80 -n field-logger
 ```
 
 Open **http://localhost:8080** in your browser.
+
+**Optional — try the Ingress instead of port-forward.** `08-ingress.yaml` routes the hostname
+`field-logger.local` to the Shiny service. With minikube's Docker driver:
+
+1. Run `minikube tunnel` in a separate terminal and keep it open.
+2. Add `127.0.0.1 field-logger.local` to your hosts file
+   (`C:\Windows\System32\drivers\etc\hosts` on Windows, `/etc/hosts` on macOS/Linux; needs admin rights).
+3. Open **http://field-logger.local**. If Chrome won't resolve `.local` names, try another browser.
 
 To access the database directly (e.g. from DBeaver or psql):
 
@@ -232,13 +208,13 @@ kubectl get secret postgres-secret -n field-logger \
   -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d
 
 # Forward the PostgreSQL port
-kubectl port-forward svc/postgres-service 5432:5432 -n field-logger --address=0.0.0.0
+kubectl port-forward svc/postgres-service 5432:5432 -n field-logger
 # Connect to localhost:5432 with the credentials above
 ```
 
 ---
 
-### Step 9 — GitHub Actions CI
+### Step 8 — GitHub Actions CI
 
 *(See `.github/workflows/build-and-push.yml` for the full workflow with comments.)*
 
@@ -252,7 +228,6 @@ After a new image is pushed, force the cluster to pull it:
 
 ```bash
 kubectl rollout restart deployment/shiny-app -n field-logger
-# or: make restart
 ```
 
 ---

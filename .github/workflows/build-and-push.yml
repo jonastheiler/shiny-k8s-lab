@@ -18,15 +18,17 @@
 #   We push two tags on every build:
 #     :latest        — always points to the most recent build from main.
 #                      The Deployment uses this tag with imagePullPolicy: Always,
-#                      so a `make restart` picks up the new image automatically.
+#                      so a `kubectl rollout restart` picks up the new image.
 #     :<git-sha>     — an immutable tag tied to the exact commit that built it.
 #                      Useful for auditing, rollbacks, and debugging.
 #
 # How to trigger a deployment after this workflow runs:
 #   The workflow only builds and pushes the image — it does not apply manifests.
-#   After the workflow completes, run `make restart` on your local machine to
-#   tell Kubernetes to pull the new image. This is the standard pattern for a
-#   local cluster that is not reachable from GitHub's runners.
+#   After the workflow completes, run this on your local machine to tell
+#   Kubernetes to pull the new image:
+#     kubectl rollout restart deployment/shiny-app -n field-logger
+#   This is the standard pattern for a local cluster that is not reachable
+#   from GitHub's runners.
 # =============================================================================
 
 name: Build and Push Shiny Image
