@@ -52,8 +52,6 @@ kubectl port-forward svc/shiny-service 8080:80 -n field-logger --address=0.0.0.0
 
 Open **http://localhost:8080** in your browser.
 
-> **WSL2 on Windows?** See the [WSL2 notes](#wsl2-on-windows) section at the bottom.
-
 ---
 
 ## Repository structure
@@ -105,7 +103,7 @@ Open **http://localhost:8080** in your browser.
 # Start minikube. It auto-selects the best driver for your OS:
 #   macOS   → Docker or HyperKit
 #   Linux   → Docker or KVM2
-#   Windows (WSL2) → Docker  (see WSL2 notes below)
+#   Windows → Docker (Docker Desktop) or Hyper-V
 minikube start
 
 # Enable the nginx Ingress controller addon.
@@ -284,50 +282,6 @@ kubectl rollout restart deployment/shiny-app -n field-logger
 - **s6-overlay and Renviron.site**: The `rocker/shiny` image uses `s6-overlay` as PID 1. Its `01_set_env` init script writes Kubernetes environment variables (DB_HOST, DB_PORT, etc.) into `/usr/local/lib/R/etc/Renviron.site` so R can read them via `Sys.getenv()`. Without `chmod 666` on that file the script silently skips the variables and `dbPool()` tries to connect via Unix socket instead of TCP.
 
 - **Connection pool over a single connection**: `dbPool()` keeps several database connections open and hands them out on demand. A single `dbConnect()` would serialize all queries — the second user has to wait for the first. The pool eliminates that bottleneck.
-
----
-
-## WSL2 on Windows
-
-Running minikube on WSL2 with the Docker driver requires a few extra steps.
-
-**Use the Docker driver explicitly:**
-```bash
-minikube start --driver=docker
-```
-
-**Fix broken DNS (if `curl` cannot resolve hostnames):**
-```bash
-# Override with Google's public DNS
-echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
-
-# To make this permanent across WSL restarts:
-sudo tee /etc/wsl.conf > /dev/null <<EOF
-[network]
-generateResolvConf = false
-EOF
-
-sudo tee /etc/resolv.conf > /dev/null <<EOF
-nameserver 8.8.8.8
-nameserver 8.8.4.4
-EOF
-```
-
-Restart WSL from PowerShell after changing `/etc/wsl.conf`:
-```powershell
-wsl --shutdown
-```
-
-**Browser access via port-forward:**
-`minikube tunnel` binds to `127.0.0.1` inside WSL2, which Windows cannot reach directly.
-`kubectl port-forward --address=0.0.0.0` binds on all interfaces, which WSL2 forwards to
-Windows automatically. This is why the Quick Start uses port-forward instead of the Ingress
-hostname — it works on all platforms without any hosts file configuration.
-
-**Avoid `.local` hostnames in Chrome:**
-`.local` is reserved for mDNS (Bonjour/Avahi). Chrome may route `.local` hostnames through
-mDNS rather than `/etc/hosts`, making the address unreachable. Accessing the app via
-`localhost:PORT` sidesteps this entirely.
 
 ---
 

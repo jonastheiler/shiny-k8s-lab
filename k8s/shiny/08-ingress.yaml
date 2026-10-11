@@ -17,7 +17,7 @@
 # How to access the app after deploying:
 #   1. Get the minikube IP:
 #        minikube ip
-#   2. Add it to your /etc/hosts file in WSL2:
+#   2. Add it to your hosts file (/etc/hosts on macOS/Linux):
 #        echo "$(minikube ip) field-logger.local" | sudo tee -a /etc/hosts
 #   3. Open http://field-logger.local in your browser.
 #
@@ -55,7 +55,7 @@ spec:
   rules:
     # The hostname that the Ingress listens for.
     # Requests to http://field-logger.local are routed to the shiny-service.
-    # This hostname must be added to /etc/hosts in WSL2 (see instructions above).
+    # This hostname must be added to your hosts file (see instructions above).
     - host: field-logger.local
       http:
         paths:
