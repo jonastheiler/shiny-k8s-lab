@@ -109,7 +109,11 @@ USER shiny
 
 # -----------------------------------------------------------------------------
 # CMD
-# The base rocker/shiny image already sets a CMD to start Shiny Server.
-# We do not override it here — the inherited CMD is:
-#   CMD ["/usr/bin/shiny-server"]
+# The base rocker/shiny image already sets a CMD. We do not override it here.
+# The inherited CMD is:
+#   CMD ["/init"]
+# /init is s6-overlay, a small process supervisor. On startup it first runs
+# the scripts in /etc/cont-init.d/ (e.g. 01_set_env, which writes the env vars
+# into Renviron.site, see PERMISSIONS above), then starts Shiny Server as a
+# supervised service and restarts it if it crashes.
 # -----------------------------------------------------------------------------
