@@ -5,7 +5,8 @@ and I wanted to learn them on a "real" example rather than a hello-world contain
 
 The example is a small R Shiny app backed by PostgreSQL. This repo takes it all the way
 from a Docker image to a running deployment on a local Kubernetes cluster (minikube),
-with a GitHub Actions pipeline that builds and publishes the image.
+with persistent storage so the data survives pod restarts, and a GitHub Actions pipeline
+that builds and publishes the image.
 
 It's written from a data scientist's perspective — if you work in R and want to see
 what it takes to get an app from your laptop into Kubernetes, this might help you too.
@@ -115,6 +116,24 @@ collection workflow:
 
 The script also inserts 5 sample rows dated 2026-09-01. The Browse Data tab shows the last
 30 days by default, so set the start date earlier to see them.
+
+### The persistent volume (`k8s/postgres/02-pvc.yaml`)
+
+*(See `k8s/postgres/02-pvc.yaml` for the full file with comments.)*
+
+In operational systems, it is crucial that stored data does not get lost when a pod restarts.
+But a container's filesystem is wiped whenever its pod is replaced — without persistent storage,
+every PostgreSQL restart would start with an empty database.
+
+The PersistentVolumeClaim asks the cluster for 1 Gi of storage without saying *how* to provide it:
+minikube's default StorageClass creates a directory on the node, a cloud cluster would create a
+cloud disk from the same manifest. The Postgres Deployment mounts it at `/var/lib/postgresql/data`,
+where all database files live.
+
+Two settings protect the data:
+- `ReadWriteOnce` — only one node can write to the volume at a time.
+- `strategy: Recreate` on the Deployment — the old Postgres pod stops before the new one starts,
+  so two pods never write to the same data directory.
 
 ### The R Shiny app (`app/`)
 
